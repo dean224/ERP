@@ -1,6 +1,7 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import json
+import secrets
 import sqlite3
 import sys
 import urllib.request
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 DATA = ROOT / "data"
 DB_PATH = DATA / "erp.sqlite3"
+SESSIONS = {}
 
 
 DEFAULT_PRODUCTS = [
@@ -164,8 +166,8 @@ DEFAULT_ROLES = [
 ]
 
 DEFAULT_USERS = [
-    {"username": "raceone", "name": "Race One Admin", "role": "Admin", "status": "启用", "created": "2026-06-16"},
-    {"username": "Chris", "name": "Chris", "role": "Warehouse", "status": "启用", "created": "2026-06-16"},
+    {"username": "raceone", "name": "Race One Admin", "role": "Admin", "status": "启用", "created": "2026-06-16", "password": "123456"},
+    {"username": "Chris", "name": "Chris", "role": "Warehouse", "status": "启用", "created": "2026-06-16", "password": "123456"},
 ]
 
 DEFAULT_SYSTEM_SETTINGS = {
@@ -658,6 +660,74 @@ def save_state(payload):
         )
 
 
+def normalized_user(user):
+    next_user = dict(user or {})
+    next_user["username"] = next_user.get("username", "")
+    next_user["name"] = next_user.get("name") or next_user["username"]
+    next_user["role"] = next_user.get("role") or "Sales"
+    next_user["status"] = next_user.get("status") or "启用"
+    next_user["created"] = next_user.get("created") or "2026-06-21"
+    next_user["password"] = next_user.get("password") or "123456"
+    return next_user
+
+
+def load_users():
+    with connect() as conn:
+        rows = conn.execute("select id, user_json from users order by id asc").fetchall()
+    return [(row["id"], normalized_user(json.loads(row["user_json"] or "{}"))) for row in rows]
+
+
+def login_user(username, password):
+    for _, user in load_users():
+        if user.get("username") != username:
+            continue
+        if user.get("status") in ("禁用", "绂佺敤"):
+            return None
+        if str(user.get("password") or "123456") != str(password or ""):
+            return None
+        safe_user = dict(user)
+        safe_user.pop("password", None)
+        return safe_user
+    return None
+
+
+def create_session(username):
+    token = secrets.token_urlsafe(32)
+    SESSIONS[token] = username
+    return token
+
+
+def authenticated_user(token):
+    username = SESSIONS.get(token or "")
+    if not username:
+        return None
+    for _, user in load_users():
+        if user.get("username") == username and user.get("status") not in ("绂佺敤", "禁用"):
+            safe_user = dict(user)
+            safe_user.pop("password", None)
+            return safe_user
+    SESSIONS.pop(token, None)
+    return None
+
+
+def change_user_password(username, current_password, new_password):
+    if not new_password:
+        return False, "new password required"
+    for row_id, user in load_users():
+        if user.get("username") != username:
+            continue
+        if str(user.get("password") or "123456") != str(current_password or ""):
+            return False, "current password incorrect"
+        user["password"] = str(new_password)
+        with connect() as conn:
+            conn.execute(
+                "update users set user_json = ? where id = ?",
+                (json.dumps(user, ensure_ascii=False), row_id),
+            )
+        return True, ""
+    return False, "user not found"
+
+
 def update_currency_rates(currencies):
     url = "https://open.er-api.com/v6/latest/CNY"
     with urllib.request.urlopen(url, timeout=8) as response:
@@ -695,16 +765,63 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+    def session_token(self):
+        header = self.headers.get("Authorization", "")
+        if header.lower().startswith("bearer "):
+            return header.split(" ", 1)[1].strip()
+        return self.headers.get("X-Session-Token", "").strip()
+
+    def require_user(self):
+        user = authenticated_user(self.session_token())
+        if not user:
+            self.send_json({"ok": False, "error": "unauthorized"}, status=401)
+            return None
+        return user
+
     def do_GET(self):
         if self.path == "/api/state":
+            if not self.require_user():
+                return
             self.send_json(fetch_state())
             return
         super().do_GET()
 
     def do_POST(self):
+        if self.path == "/api/login":
+            payload = self.read_json()
+            user = login_user(payload.get("username", ""), payload.get("password", ""))
+            if not user:
+                self.send_json({"ok": False, "error": "invalid credentials"}, status=401)
+                return
+            self.send_json({"ok": True, "user": user, "token": create_session(user.get("username", ""))})
+            return
+        if self.path == "/api/password":
+            user = self.require_user()
+            if not user:
+                return
+            payload = self.read_json()
+            username = payload.get("username", "")
+            if username != user.get("username"):
+                self.send_json({"ok": False, "error": "forbidden"}, status=403)
+                return
+            ok, error = change_user_password(
+                username,
+                payload.get("currentPassword", ""),
+                payload.get("newPassword", ""),
+            )
+            if not ok:
+                self.send_json({"ok": False, "error": error}, status=400)
+                return
+            self.send_json({"ok": True})
+            return
         if self.path == "/api/currencies/update":
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            if not self.require_user():
+                return
+            payload = self.read_json()
             try:
                 currencies, updated = update_currency_rates(payload.get("currencies", []))
             except Exception as exc:
@@ -715,8 +832,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path != "/api/state":
             self.send_error(404)
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        if not self.require_user():
+            return
+        payload = self.read_json()
         save_state(payload)
         self.send_json({"ok": True})
 

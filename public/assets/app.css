@@ -400,7 +400,8 @@ textarea {
 }
 
 .table-card {
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -466,12 +467,15 @@ code {
 .icon-action {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  min-width: max-content;
   color: #0047ff;
   background: transparent;
   border: 0;
   cursor: pointer;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .icon-action {
@@ -485,17 +489,27 @@ code {
 .inline-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
   gap: 10px;
+  white-space: nowrap;
 }
 
 .action-col {
-  width: 92px;
-  min-width: 92px;
+  width: 104px;
+  min-width: 104px;
   text-align: right;
+  white-space: nowrap;
 }
 
 .action-col .inline-actions {
-  justify-content: center;
+  justify-content: flex-end;
+}
+
+td:has(.link-action),
+td:has(.icon-action),
+th:has(+ .action-col) {
+  white-space: nowrap;
 }
 
 .icon-action svg {
@@ -561,6 +575,36 @@ code {
 .settings-panel h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.document-panel {
+  display: grid;
+  gap: 22px;
+  padding: 18px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.detail-grid div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  background: #f8fbff;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.detail-grid span {
+  color: #71809a;
+  font-size: 12px;
+}
+
+.detail-grid strong {
+  color: var(--ink);
 }
 
 .role-panel .section-head p {
@@ -1792,6 +1836,46 @@ button:disabled {
 .attributes-panel,
 .variants-panel {
   padding: 16px;
+}
+
+.variants-panel {
+  overflow-x: auto;
+}
+
+.variants-table {
+  table-layout: fixed;
+  min-width: 860px;
+}
+
+.variants-table th,
+.variants-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variants-table th:nth-last-child(4),
+.variants-table th:nth-last-child(3),
+.variants-table .number-col {
+  width: 180px;
+}
+
+.variants-table th:nth-last-child(2),
+.variants-table .check-col {
+  width: 70px;
+  text-align: center;
+}
+
+.variants-table th:last-child,
+.variants-table .action-col {
+  width: 64px;
+  min-width: 64px;
+}
+
+.variants-table .price-input {
+  width: 100%;
+  max-width: 180px;
+  text-align: right;
 }
 
 .section-head {

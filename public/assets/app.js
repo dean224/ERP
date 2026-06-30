@@ -22,31 +22,31 @@ const icons = {
 };
 
 const nav = [
-  { title: '', items: [{ label: '仪表盘', icon: 'grid', page: 'dashboard' }] },
-  { title: '销售', items: [
+  { title: '', permission: 'dashboard', items: [{ label: '仪表盘', icon: 'grid', page: 'dashboard' }] },
+  { title: '销售', permission: 'sales', items: [
     { label: '销售发票', icon: 'file', page: 'sales-invoices' },
     { label: '发货单', icon: 'send', page: 'delivery-orders' },
     { label: '报价单', icon: 'receipt', page: 'quotations' },
     { label: '客户', icon: 'users', page: 'customers' }
   ] },
-  { title: '采购', items: [
+  { title: '采购', permission: 'purchasing', items: [
     { label: '采购发票', icon: 'receipt', page: 'purchase-invoices' },
     { label: '收货单', icon: 'box', page: 'goods-receipts' },
     { label: '采购订单', icon: 'file', page: 'purchase-orders' },
     { label: '供应商', icon: 'receipt', page: 'suppliers' }
   ] },
-  { title: '产品与库存', items: [
+  { title: '产品与库存', permission: 'catalog', items: [
     { label: '产品', icon: 'box', page: 'products' },
     { label: '库存', icon: 'grid', page: 'inventory' },
     { label: '序列号 / QR', icon: 'receipt', page: 'serial-qr' }
   ] },
-  { title: '财务', items: [
+  { title: '财务', permission: 'finance', items: [
     { label: '资金', icon: 'wallet', page: 'capital' },
     { label: '费用', icon: 'wallet', page: 'expenses' },
     { label: '利润表', icon: 'file', page: 'profit-loss' },
     { label: '货币汇率', icon: 'wallet', page: 'currencies' }
   ] },
-  { title: 'ADMIN', items: [
+  { title: 'ADMIN', permission: 'admin', items: [
     { label: '用户', icon: 'users', page: 'users' },
     { label: '系统设置', icon: 'gear', page: 'settings' }
   ] }
@@ -123,6 +123,12 @@ const purchasingPages = {
     ]
   }
 };
+
+const purchaseOrdersKey = 'raceone-erp-purchase-orders-v1';
+try {
+  const savedPurchaseOrders = JSON.parse(localStorage.getItem(purchaseOrdersKey));
+  if (Array.isArray(savedPurchaseOrders)) purchasingPages['purchase-orders'].rows = savedPurchaseOrders;
+} catch {}
 
 const defaultSuppliers = [
   {
@@ -274,13 +280,14 @@ const defaultRoles = [
 ];
 
 const defaultUsers = [
-  { username: 'raceone', name: 'Race One Admin', role: 'Admin', status: '启用', created: '2026-06-16' },
-  { username: 'Chris', name: 'Chris', role: 'Warehouse', status: '启用', created: '2026-06-16' }
+  { username: 'raceone', name: 'Race One Admin', role: 'Admin', status: '启用', created: '2026-06-16', password: '123456' },
+  { username: 'Chris', name: 'Chris', role: 'Warehouse', status: '启用', created: '2026-06-16', password: '123456' }
 ];
 
 const defaultSystemSettings = {
   companyName: 'Raceone',
   legalName: 'Raceone Wheels',
+  systemName: '库存系统',
   defaultCurrency: 'CNY',
   timezone: 'Asia/Shanghai',
   dateFormat: 'YYYY/MM/DD',
@@ -292,7 +299,8 @@ const defaultSystemSettings = {
 };
 
 const storageKey = 'raceone-erp-catalog-v1';
-const authKey = 'raceone-erp-auth-v1';
+const authKey = 'raceone-erp-auth-v2';
+const sessionKey = 'raceone-erp-session-v1';
 const logoutKey = 'raceone-erp-logged-out-v1';
 const apiStateUrl = '/api/state';
 const defaultTransactions = [
@@ -353,7 +361,7 @@ let capitalTypeFilter = '';
 let expenseCategoryFilter = '';
 let profitLossFrom = '2026-01-01';
 let profitLossTo = '2026-06-20';
-let settingsTab = 'warehouses';
+let settingsTab = 'general';
 let selectedWarehouse = 0;
 let flashMessage = '';
 let databaseReady = false;
@@ -364,12 +372,45 @@ let stockPickerSearch = '';
 let loginError = '';
 
 function currentUser() {
-  const username = localStorage.getItem(authKey) || 'raceone';
-  return users.find(user => user.username === username) || users.find(user => user.username === 'raceone') || users[0] || normalizeUser({});
+  const username = localStorage.getItem(authKey);
+  if (!username) return normalizeUser({});
+  return users.find(user => user.username === username) || normalizeUser({});
 }
 
 function isLoggedIn() {
-  return localStorage.getItem(authKey) !== null || localStorage.getItem(logoutKey) !== '1';
+  const username = localStorage.getItem(authKey);
+  const token = localStorage.getItem(sessionKey);
+  return !!username && !!token && users.some(user => user.username === username && user.status === '启用');
+}
+
+function currentRole() {
+  const user = currentUser();
+  return roles.find(role => role.name === user.role) || roles.find(role => role.name === 'Sales') || normalizeRole({});
+}
+
+function currentPermissions() {
+  const role = currentRole();
+  return new Set(role.permissions || []);
+}
+
+function pagePermission(page) {
+  if (page === 'dashboard') return 'dashboard';
+  if (page === 'sales-invoices' || page.startsWith('sales-invoices/') || page === 'delivery-orders' || page === 'quotations' || page.startsWith('quotations/') || page === 'customers') return 'sales';
+  if (page === 'purchase-invoices' || page.startsWith('purchase-invoices/') || page === 'goods-receipts' || page === 'purchase-orders' || page === 'suppliers') return 'purchasing';
+  if (page === 'products' || page === 'inventory' || page === 'serial-qr') return 'catalog';
+  if (page === 'capital' || page === 'expenses' || page === 'profit-loss' || page === 'currencies') return 'finance';
+  if (page === 'users' || page === 'settings') return 'admin';
+  return 'dashboard';
+}
+
+function canAccessPage(page) {
+  return currentPermissions().has(pagePermission(page));
+}
+
+function firstAllowedPage() {
+  const permissions = currentPermissions();
+  const section = nav.find(group => permissions.has(group.permission));
+  return section?.items?.[0]?.page || 'dashboard';
 }
 
 function currentPage() {
@@ -509,14 +550,15 @@ function normalizeDeliveryOrder(order) {
 }
 
 function normalizePurchaseInvoice(invoice) {
+  const currency = invoice.currency || 'CNY';
   return {
     no: invoice.no || nextPurchaseInvoiceNo(),
     ref: invoice.ref || '',
     date: invoice.date || '2026-06-18',
     status: invoice.status || '草稿',
     supplier: invoice.supplier || '',
-    currency: invoice.currency || 'CNY',
-    exchangeRate: Number(invoice.exchangeRate) || 1,
+    currency,
+    exchangeRate: Number(invoice.exchangeRate) || currencyRate(currency),
     notes: invoice.notes || '',
     items: Array.isArray(invoice.items) ? invoice.items.map(item => ({
       description: item.description || '',
@@ -598,7 +640,8 @@ function normalizeUser(user) {
     name: user.name || user.username || '',
     role: user.role || 'Sales',
     status: user.status === '禁用' ? '禁用' : '启用',
-    created: user.created || '2026-06-21'
+    created: user.created || '2026-06-21',
+    password: user.password || '123456'
   };
 }
 
@@ -609,6 +652,7 @@ function normalizeSystemSettings(settings) {
   return {
     companyName: settings.companyName || 'Raceone',
     legalName: settings.legalName || 'Raceone Wheels',
+    systemName: settings.systemName || '库存系统',
     defaultCurrency: settings.defaultCurrency || 'CNY',
     timezone: settings.timezone || 'Asia/Shanghai',
     dateFormat: settings.dateFormat || 'YYYY/MM/DD',
@@ -683,6 +727,10 @@ function removeReceiptStock(receipt) {
   transactions = transactions.filter(row => !(row[1] === '入库' && row[5] === receipt.no));
 }
 
+function removeDeliveryStock(order) {
+  transactions = transactions.filter(row => !(row[1] === '出库' && row[5] === order.no));
+}
+
 function invoiceTotal(invoice) {
   return invoice.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
 }
@@ -701,6 +749,19 @@ function salesInvoiceCost(invoice) {
 
 function currencyRate(code) {
   return currencies?.find(currency => currency.code === code)?.rate || (code === 'CNY' ? 1 : 1);
+}
+
+function ensureDocumentExchangeRate(document) {
+  if (!document) return 1;
+  const code = document.currency || 'CNY';
+  const rate = Number(document.exchangeRate);
+  const defaultRate = currencyRate(code);
+  if (code === 'CNY') {
+    document.exchangeRate = 1;
+  } else if (!rate || rate === 1) {
+    document.exchangeRate = defaultRate;
+  }
+  return Number(document.exchangeRate) || defaultRate || 1;
 }
 
 function money(amount, currency = 'CNY') {
@@ -913,6 +974,20 @@ function normalizeSerial(row) {
   return next;
 }
 
+function authHeaders(extra = {}) {
+  const token = localStorage.getItem(sessionKey);
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+function forceLogin(message = '登录已过期，请重新登录') {
+  localStorage.removeItem(authKey);
+  localStorage.removeItem(sessionKey);
+  localStorage.setItem(logoutKey, '1');
+  modal = null;
+  loginError = message;
+  renderLogin();
+}
+
 function saveState() {
   const payload = {
     products,
@@ -936,11 +1011,12 @@ function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(payload));
   return fetch(apiStateUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload)
   })
     .then(response => {
       databaseReady = response.ok;
+      if (response.status === 401) forceLogin();
       return response;
     })
     .catch(() => {
@@ -950,8 +1026,10 @@ function saveState() {
 }
 
 async function loadFromDatabase() {
+  if (!localStorage.getItem(sessionKey)) return;
   try {
-    const response = await fetch(apiStateUrl);
+    const response = await fetch(apiStateUrl, { headers: authHeaders() });
+    if (response.status === 401) return forceLogin();
     if (!response.ok) return;
     const state = await response.json();
     products = state.products.map(normalizeProduct);
@@ -999,6 +1077,13 @@ function compactDate(value) {
 
 function route(page) {
   if (!isLoggedIn()) return renderLogin();
+  if (!canAccessPage(page)) {
+    const fallback = firstAllowedPage();
+    if (page !== fallback) {
+      location.hash = `#/${fallback}`;
+      return;
+    }
+  }
   if (page === 'dashboard') return renderDashboard();
   if (page === 'products') return renderProducts();
   if (page === 'sales-invoices') return renderSalesInvoices();
@@ -1013,6 +1098,7 @@ function route(page) {
   if (page === 'purchase-invoices') return renderPurchaseInvoices();
   if (page.startsWith('purchase-invoices/')) return renderPurchaseInvoiceEditor();
   if (page === 'goods-receipts') return renderGoodsReceipts();
+  if (page.startsWith('purchase-orders/')) return renderPurchaseOrderDetail();
   if (page === 'capital') return renderCapital();
   if (page === 'expenses') return renderExpenses();
   if (page === 'profit-loss') return renderProfitLoss();
@@ -1032,11 +1118,12 @@ function route(page) {
 }
 
 function navHtml(page) {
-  return nav.map(section => `
+  const permissions = currentPermissions();
+  return nav.filter(section => permissions.has(section.permission)).map(section => `
     <div class="nav-section">
       ${section.title ? `<p class="nav-title">${section.title}</p>` : ''}
       ${section.items.map(item => `
-        <a class="nav-item ${item.page === page ? 'active' : ''}" href="#/${item.page}">
+        <a class="nav-item ${item.page === page || page.startsWith(`${item.page}/`) ? 'active' : ''}" href="#/${item.page}">
           ${icons[item.icon]}<span>${item.label}</span>
         </a>
       `).join('')}
@@ -1051,18 +1138,19 @@ function renderLogin() {
       <section class="login-card">
         <div class="login-brand">
           <div class="brand-mark">${icons.send}</div>
-          <div><strong>Raceone</strong><span>库存系统</span></div>
+          <div><strong>${systemSettings.companyName}</strong><span>${systemSettings.systemName}</span></div>
         </div>
         <h1>登录</h1>
         <p>请输入账号和密码继续使用系统。</p>
         ${message}
-        <label>用户名<input data-login-username value="raceone" autocomplete="username"></label>
+        <label>用户名<input data-login-username autocomplete="username"></label>
         <label>密码<input data-login-password type="password" autocomplete="current-password" placeholder="请输入密码"></label>
         <button class="btn primary login-submit" data-login-submit>登录</button>
       </section>
     </main>
   `;
   document.querySelector('[data-login-submit]')?.addEventListener('click', handleLogin);
+  document.querySelector('[data-login-username]')?.focus();
   document.querySelectorAll('[data-login-username], [data-login-password]').forEach(input => {
     input.addEventListener('keydown', event => {
       if (event.key === 'Enter') handleLogin();
@@ -1070,17 +1158,28 @@ function renderLogin() {
   });
 }
 
-function handleLogin() {
+async function handleLogin() {
   const username = document.querySelector('[data-login-username]')?.value.trim() || '';
   const password = document.querySelector('[data-login-password]')?.value || '';
-  const user = users.find(item => item.username === username && item.status !== '禁用' && item.status !== '绂佺敤');
-  if (!user || password !== '123456') {
+  try {
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok || !result.token) throw new Error(result.error || 'invalid credentials');
+    const index = users.findIndex(item => item.username === username);
+    if (index >= 0 && result.user) users[index] = normalizeUser({ ...users[index], ...result.user, password });
+    localStorage.setItem(sessionKey, result.token);
+  } catch {
     loginError = '用户名或密码不正确';
     return renderLogin();
   }
   localStorage.setItem(authKey, username);
   localStorage.removeItem(logoutKey);
   loginError = '';
+  await loadFromDatabase();
   route(currentPage());
 }
 
@@ -1092,7 +1191,7 @@ function shell(content) {
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">${icons.send}</div>
-          <div><strong>Raceone</strong><span>库存系统</span></div>
+          <div><strong>${systemSettings.companyName}</strong><span>${systemSettings.systemName}</span></div>
         </div>
         <nav class="nav">${navHtml(page)}</nav>
         <div class="sidebar-footer">
@@ -1173,10 +1272,10 @@ function renderProducts() {
         </div>
         <div class="panel variants-panel">
           <div class="section-head"><h3>变体与价格 (${variants.length})</h3><button class="btn primary" data-save-variants>${icons.save}保存</button></div>
-          <table>
+          <table class="variants-table">
             <thead><tr>${attrs.map(attr => `<th>${attr.name}</th>`).join('')}<th>SKU</th><th class="right">售价</th><th class="right">成本</th><th>启用</th><th></th></tr></thead>
             <tbody>${variants.map((v, variantIndex) => `
-              <tr>${v.options.map(option => `<td>${option}</td>`).join('')}<td><code>${v.sku}</code></td><td><input class="price-input" data-variant-selling="${variantIndex}" value="${v.selling}"></td><td><input class="price-input" data-variant-cost="${variantIndex}" value="${v.cost}"></td><td><input type="checkbox" data-variant-active="${variantIndex}" ${v.active ? 'checked' : ''}></td><td><button class="icon-action" data-delete-variant="${variantIndex}">${icons.trash}</button></td></tr>
+              <tr>${v.options.map(option => `<td>${option}</td>`).join('')}<td><code>${v.sku}</code></td><td class="number-col"><input class="price-input" data-variant-selling="${variantIndex}" value="${v.selling}"></td><td class="number-col"><input class="price-input" data-variant-cost="${variantIndex}" value="${v.cost}"></td><td class="check-col"><input type="checkbox" data-variant-active="${variantIndex}" ${v.active ? 'checked' : ''}></td><td class="action-col"><button class="icon-action" data-delete-variant="${variantIndex}">${icons.trash}</button></td></tr>
             `).join('')}</tbody>
           </table>
         </div>
@@ -1205,7 +1304,7 @@ function renderInventory() {
   shell(`
     ${pageHead('库存', '按 SKU 自动汇总入库、出库与库存余额', `
       <button class="btn" data-export="inventory">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn success" data-modal="stock-in">${icons.download}入库</button>
       <button class="btn danger" data-modal="stock-out">${icons.upload}出库</button>
     `)}
@@ -1230,7 +1329,7 @@ function renderSerials() {
   shell(`
     ${pageHead('序列号 / QR 追踪', '每套轮组一个唯一序列号 (RW-YYMMDD-XXXX)，可用于 QR 标签', `
       <button class="btn" data-export="serials">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-modal="generate-serials">${icons.plus}生成序列号</button>
     `)}
     <div class="toolbar">
@@ -1349,7 +1448,7 @@ function renderSalesInvoices() {
   shell(`
     ${pageHead('销售发票', '主要销售单据 - 支持多币种 - 可编辑 A4 单据并生成发货单', `
       <button class="btn" data-export="sales-invoices">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-new-sales-invoice>${icons.plus}新建发票</button>
     `)}
     <div class="toolbar">
@@ -1359,8 +1458,9 @@ function renderSalesInvoices() {
     <div class="table-card"><table><thead><tr><th>发票号</th><th>日期</th><th>客户</th><th>币种</th><th>总额</th><th>本位币 (CNY)</th><th>状态</th><th class="right">操作</th></tr></thead><tbody>
       ${rows.map(invoice => {
         const index = salesInvoices.indexOf(invoice);
+        ensureDocumentExchangeRate(invoice);
         const total = salesInvoiceTotal(invoice);
-        return `<tr><td>${invoice.no}</td><td>${prettyDate(invoice.date)}</td><td>${invoice.customer || '-'}</td><td>${invoice.currency}</td><td>${money(total, invoice.currency)}</td><td>${money(total * invoice.exchangeRate, 'CNY')}</td><td>${invoice.status}</td><td><button class="link-action" data-open-sales-invoice="${index}">${icons.open}打开</button></td></tr>`;
+        return `<tr><td>${invoice.no}</td><td>${prettyDate(invoice.date)}</td><td>${invoice.customer || '-'}</td><td>${invoice.currency}</td><td>${money(total, invoice.currency)}</td><td>${money(total * invoice.exchangeRate, 'CNY')}</td><td>${invoice.status}</td><td class="action-col"><div class="inline-actions"><button class="link-action" data-open-sales-invoice="${index}">${icons.open}打开</button><button class="icon-action" data-delete-sales-invoice-row="${index}" title="删除">${icons.trash}</button></div></td></tr>`;
       }).join('') || `<tr><td colspan="8"><div class="empty">暂无销售发票，请创建第一张。</div></td></tr>`}
     </tbody></table></div>
   `);
@@ -1376,7 +1476,7 @@ function renderQuotations() {
   shell(`
     ${pageHead('报价单', '客户报价单 - 已接受报价可转换为销售发票', `
       <button class="btn" data-export="quotations">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-new-quotation>${icons.plus}新建报价单</button>
     `)}
     <div class="toolbar">
@@ -1386,6 +1486,7 @@ function renderQuotations() {
     <div class="table-card"><table><thead><tr><th>报价单号</th><th>日期</th><th>客户</th><th>币种</th><th>总额</th><th>本位币 (CNY)</th><th>状态</th><th class="right">操作</th></tr></thead><tbody>
       ${rows.map(quote => {
         const index = quotations.indexOf(quote);
+        ensureDocumentExchangeRate(quote);
         const total = quotationTotal(quote);
         return `<tr><td>${quote.no}</td><td>${prettyDate(quote.date)}</td><td>${quote.customer || '-'}</td><td>${quote.currency}</td><td>${money(total, quote.currency)}</td><td>${money(total * quote.exchangeRate, 'CNY')}</td><td>${quote.status}</td><td><button class="link-action" data-open-quotation="${index}">${icons.open}打开</button></td></tr>`;
       }).join('') || `<tr><td colspan="8"><div class="empty">暂无报价单，请创建第一张。</div></td></tr>`}
@@ -1408,6 +1509,7 @@ function activeQuotation() {
 function renderQuotationEditor() {
   const quote = activeQuotation();
   if (!quote) return renderQuotations();
+  ensureDocumentExchangeRate(quote);
   const customer = selectedCustomerInfo(quote.customer);
   const total = quotationTotal(quote);
   const base = total * (Number(quote.exchangeRate) || 1);
@@ -1448,7 +1550,7 @@ function renderQuotationEditor() {
       <button class="btn ghost" data-back-quotations>← 返回</button>
       <button class="btn danger-text" data-delete-quotation>${icons.trash}删除</button>
       <span></span>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn" onclick="window.print()">${icons.download}打印</button>
       <button class="btn success" data-convert-quote>${icons.file}转换为销售发票</button>
       <button class="btn primary" data-save-quotation>${icons.save}保存</button>
@@ -1510,6 +1612,7 @@ function selectedCustomerInfo(name) {
 function renderSalesInvoiceEditor() {
   const invoice = activeSalesInvoice();
   if (!invoice) return renderSalesInvoices();
+  ensureDocumentExchangeRate(invoice);
   const customer = selectedCustomerInfo(invoice.customer);
   const total = salesInvoiceTotal(invoice);
   const base = total * (Number(invoice.exchangeRate) || 1);
@@ -1561,7 +1664,7 @@ function renderSalesInvoiceEditor() {
       <button class="btn ghost" data-back-sales-invoices>← 返回</button>
       <button class="btn danger-text" data-delete-sales-invoice>${icons.trash}删除</button>
       <span></span>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn" onclick="window.print()">${icons.download}打印</button>
       <button class="btn success" data-generate-delivery-order>${icons.send}生成发货单</button>
       <button class="btn primary" data-save-sales-invoice>${icons.save}保存</button>
@@ -1618,7 +1721,7 @@ function renderPurchaseInvoices() {
   shell(`
     ${pageHead('采购发票', '主要采购单据 - 支持多币种 - 可编辑 A4 单据并生成收货单', `
       <button class="btn" data-export="purchase-invoices">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-new-purchase-invoice>${icons.plus}新建发票</button>
     `)}
     <div class="toolbar">
@@ -1628,9 +1731,10 @@ function renderPurchaseInvoices() {
     <div class="table-card"><table><thead><tr><th>发票号</th><th>参考号</th><th>日期</th><th>供应商</th><th>币种</th><th>总额</th><th>本位币 (CNY)</th><th>状态</th><th>操作</th></tr></thead><tbody>
       ${rows.map(invoice => {
         const index = purchaseInvoices.indexOf(invoice);
+        ensureDocumentExchangeRate(invoice);
         const total = invoiceTotal(invoice);
         const base = total * (Number(invoice.exchangeRate) || 1);
-        return `<tr><td>${invoice.no}</td><td>${invoice.ref || '-'}</td><td>${prettyDate(invoice.date)}</td><td>${invoice.supplier || '-'}</td><td>${invoice.currency}</td><td>${money(total, invoice.currency)}</td><td>${money(base, 'CNY')}</td><td>${invoice.status}</td><td><button class="link-action" data-open-purchase-invoice="${index}">${icons.open}打开</button></td></tr>`;
+        return `<tr><td>${invoice.no}</td><td>${invoice.ref || '-'}</td><td>${prettyDate(invoice.date)}</td><td>${invoice.supplier || '-'}</td><td>${invoice.currency}</td><td>${money(total, invoice.currency)}</td><td>${money(base, 'CNY')}</td><td>${invoice.status}</td><td class="action-col"><div class="inline-actions"><button class="link-action" data-open-purchase-invoice="${index}">${icons.open}打开</button><button class="icon-action" data-delete-purchase-invoice-row="${index}" title="删除">${icons.trash}</button></div></td></tr>`;
       }).join('') || `<tr><td colspan="9"><div class="empty">暂无采购发票</div></td></tr>`}
     </tbody></table></div>
   `);
@@ -1661,6 +1765,7 @@ function selectedSupplierInfo(name) {
 function renderPurchaseInvoiceEditor() {
   const invoice = activeInvoice();
   if (!invoice) return renderPurchaseInvoices();
+  ensureDocumentExchangeRate(invoice);
   const supplier = selectedSupplierInfo(invoice.supplier);
   const total = invoiceTotal(invoice);
   const base = total * (Number(invoice.exchangeRate) || 1);
@@ -1718,7 +1823,7 @@ function renderPurchaseInvoiceEditor() {
       <button class="btn ghost" data-back-purchase-invoices>← 返回</button>
       <button class="btn danger-text" data-delete-purchase-invoice>${icons.trash}删除</button>
       <span></span>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn" onclick="window.print()">${icons.receipt || icons.file}打印</button>
       <button class="btn success" data-generate-receipt>${icons.box}生成收货单</button>
       <button class="btn primary" data-save-purchase-invoice>${icons.save}保存</button>
@@ -1736,7 +1841,7 @@ function renderGoodsReceipts() {
   shell(`
     ${pageHead('收货单 (GRN)', '由采购发票生成 - 收货会把库存加入仓库', `
       <button class="btn" data-export="goods-receipts">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
     `)}
     <div class="toolbar">
       <div class="field">${icons.search}<input class="search" data-table-search placeholder="搜索 GRN / 发票 / 供应商" value="${tableSearch}"></div>
@@ -1765,7 +1870,7 @@ function renderCapital() {
   shell(`
     ${pageHead('资金注入', '记录股东投入、运营资金和资金调整，统一折算为 CNY', `
       <button class="btn" data-export="capital">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-modal="capital-entry">${icons.plus}新增记录</button>
     `)}
     <div class="cards finance-cards">
@@ -1806,7 +1911,7 @@ function renderExpenses() {
   shell(`
     ${pageHead('费用支出', '记录业务费用，用于净利润估算', `
       <button class="btn" data-export="expenses">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-modal="expense-entry">${icons.plus}新增费用</button>
     `)}
     <div class="cards finance-cards">
@@ -1839,7 +1944,7 @@ function renderProfitLoss() {
   shell(`
     ${pageHead('利润表', '收入、销售成本、费用与净利润，统一以 CNY 展示', `
       <button class="btn" data-export="profit-loss">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
     `)}
     <div class="filter-card pl-filter">
       <label>开始日期<input type="date" data-pl-from value="${profitLossFrom}"></label>
@@ -1937,10 +2042,23 @@ function renderSettings() {
   shell(`
     ${pageHead('系统设置', '基础资料与账户安全')}
     <div class="settings-tabs">
+      <button class="${settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icons.gear}基础信息</button>
       <button class="${settingsTab === 'warehouses' ? 'active' : ''}" data-settings-tab="warehouses">${icons.box}仓库</button>
       <button class="${settingsTab === 'account' ? 'active' : ''}" data-settings-tab="account">${icons.key}我的账户</button>
     </div>
-    ${settingsTab === 'warehouses' ? `
+    ${settingsTab === 'general' ? `
+      <section class="panel settings-panel">
+        <div class="section-head">
+          <div><h2>基础信息</h2><p>用于左上角品牌、登录页和系统显示名称。</p></div>
+          <button class="btn primary" data-save-settings>${icons.save}保存</button>
+        </div>
+        <div class="form-grid inline-form">
+          <label>公司 / 品牌名称 *<input data-field="settingCompanyName" value="${systemSettings.companyName}" placeholder="例如：XX 公司"></label>
+          <label>系统名称 *<input data-field="settingSystemName" value="${systemSettings.systemName}" placeholder="例如：库存系统 / ERP 系统"></label>
+          <label class="span-2">法定名称<input data-field="settingLegalName" value="${systemSettings.legalName}" placeholder="例如：XX Trading Co., Ltd"></label>
+        </div>
+      </section>
+    ` : settingsTab === 'warehouses' ? `
       <section class="panel settings-panel">
         <div class="section-head">
           <h2>仓库</h2>
@@ -2008,7 +2126,8 @@ function readUserForm(existing = {}) {
     name: fieldValue('userName', ''),
     role: fieldValue('userRole', 'Sales'),
     status: fieldValue('userStatus', '启用'),
-    created: existing.created || '2026-06-21'
+    created: existing.created || '2026-06-21',
+    password: existing.password || '123456'
   });
 }
 
@@ -2052,13 +2171,15 @@ function readSystemSettings() {
   return normalizeSystemSettings({
     companyName: fieldValue('settingCompanyName', 'Raceone'),
     legalName: fieldValue('settingLegalName', 'Raceone Wheels'),
-    defaultCurrency: fieldValue('settingDefaultCurrency', 'CNY'),
-    timezone: fieldValue('settingTimezone', 'Asia/Shanghai'),
-    dateFormat: fieldValue('settingDateFormat', 'YYYY/MM/DD'),
-    defaultWarehouse: fieldValue('settingDefaultWarehouse', 'HQ'),
-    lowStockThreshold: fieldValue('settingLowStockThreshold', '5'),
-    requireStrongPassword: document.querySelector('[data-field="settingStrongPassword"]')?.checked !== false,
-    allowAutoRateUpdate: document.querySelector('[data-field="settingAutoRate"]')?.checked !== false
+    systemName: fieldValue('settingSystemName', '库存系统'),
+    defaultCurrency: fieldValue('settingDefaultCurrency', systemSettings.defaultCurrency),
+    timezone: fieldValue('settingTimezone', systemSettings.timezone),
+    dateFormat: fieldValue('settingDateFormat', systemSettings.dateFormat),
+    defaultWarehouse: fieldValue('settingDefaultWarehouse', systemSettings.defaultWarehouse),
+    warehouses: systemSettings.warehouses,
+    lowStockThreshold: fieldValue('settingLowStockThreshold', String(systemSettings.lowStockThreshold)),
+    requireStrongPassword: document.querySelector('[data-field="settingStrongPassword"]')?.checked ?? systemSettings.requireStrongPassword,
+    allowAutoRateUpdate: document.querySelector('[data-field="settingAutoRate"]')?.checked ?? systemSettings.allowAutoRateUpdate
   });
 }
 
@@ -2248,7 +2369,7 @@ function syncActiveInvoiceFromForm() {
   invoice.ref = fieldValue('invoiceRef', invoice.ref);
   invoice.supplier = fieldValue('invoiceSupplier', invoice.supplier);
   invoice.currency = fieldValue('invoiceCurrency', invoice.currency);
-  invoice.exchangeRate = Number(fieldValue('invoiceRate', invoice.exchangeRate)) || 1;
+  invoice.exchangeRate = Number(fieldValue('invoiceRate', invoice.exchangeRate)) || currencyRate(invoice.currency);
   invoice.notes = document.querySelector('[data-field="invoiceNotes"]')?.value || '';
   invoice.items.forEach((item, index) => {
     item.description = document.querySelector(`[data-invoice-desc="${index}"]`)?.value || item.description;
@@ -2265,7 +2386,7 @@ function syncActiveSalesInvoiceFromForm() {
   invoice.status = fieldValue('salesStatus', invoice.status);
   invoice.customer = fieldValue('salesCustomer', invoice.customer);
   invoice.currency = fieldValue('salesCurrency', invoice.currency);
-  invoice.exchangeRate = Number(fieldValue('salesRate', invoice.exchangeRate)) || 1;
+  invoice.exchangeRate = Number(fieldValue('salesRate', invoice.exchangeRate)) || currencyRate(invoice.currency);
   invoice.notes = document.querySelector('[data-field="salesNotes"]')?.value || '';
   invoice.items.forEach((item, index) => {
     item.description = document.querySelector(`[data-sales-desc="${index}"]`)?.value || item.description;
@@ -2283,7 +2404,7 @@ function syncActiveQuotationFromForm() {
   quote.status = fieldValue('quoteStatus', quote.status);
   quote.customer = fieldValue('quoteCustomer', quote.customer);
   quote.currency = fieldValue('quoteCurrency', quote.currency);
-  quote.exchangeRate = Number(fieldValue('quoteRate', quote.exchangeRate)) || 1;
+  quote.exchangeRate = Number(fieldValue('quoteRate', quote.exchangeRate)) || currencyRate(quote.currency);
   quote.notes = document.querySelector('[data-field="quoteNotes"]')?.value || '';
   quote.items.forEach((item, index) => {
     item.description = document.querySelector(`[data-quote-desc="${index}"]`)?.value || item.description;
@@ -2356,7 +2477,7 @@ function renderSuppliers() {
   shell(`
     ${pageHead('供应商', '供应商目录 - 联系人 - 付款条款 - 采购历史', `
       <button class="btn" data-export="suppliers">${icons.download}Excel</button>
-      <button class="btn" onclick="window.print()">${icons.download}PDF</button>
+      <button class="btn" data-pdf>${icons.download}PDF</button>
       <button class="btn primary" data-modal="supplier">${icons.plus}新建供应商</button>
     `)}
     <div class="toolbar">
@@ -2490,11 +2611,64 @@ function readCustomerForm() {
 
 function renderSimplePage(cfg) {
   shell(`
-    ${pageHead(cfg.title, cfg.subtitle, `<button class="btn" data-export="simple">${icons.download}Excel</button><button class="btn" onclick="window.print()">${icons.download}PDF</button><button class="btn primary" data-modal="simple">${icons.plus}${cfg.primary}</button>`)}
+    ${pageHead(cfg.title, cfg.subtitle, `<button class="btn" data-export="simple">${icons.download}Excel</button><button class="btn" data-pdf>${icons.download}PDF</button><button class="btn primary" data-modal="simple">${icons.plus}${cfg.primary}</button>`)}
     <div class="toolbar"><div class="field">${icons.search}<input class="search" data-table-search placeholder="${cfg.search}" value="${tableSearch}"></div><select class="select"><option>${cfg.filter}</option></select></div>
     <div class="table-card"><table><thead><tr>${cfg.columns.map(col => `<th>${col}</th>`).join('')}</tr></thead><tbody>
-      ${cfg.rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}<td><div class="inline-actions"><button class="link-action">${icons.open}打开</button><button class="icon-action">${icons.trash}</button></div></td></tr>`).join('')}
+      ${cfg.rows.map((row, index) => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}<td class="action-col"><div class="inline-actions"><button class="link-action" data-open-simple="${index}">${icons.open}打开</button><button class="icon-action" data-delete-simple="${index}" title="删除">${icons.trash}</button></div></td></tr>`).join('')}
     </tbody></table></div>
+  `);
+}
+
+function currentPurchaseOrderIndex() {
+  const [, rawIndex] = currentPage().split('/');
+  const index = Number(rawIndex);
+  const rows = purchaseOrderRows();
+  return Number.isFinite(index) && rows[index] ? index : 0;
+}
+
+function purchaseOrderFromRow(row) {
+  const amountText = row?.[5] || 'CNY 0.00';
+  const currency = amountText.includes('USD') ? 'USD' : amountText.includes('EUR') ? 'EUR' : 'CNY';
+  const total = Number(String(amountText).replace(/[^0-9.-]/g, '')) || 0;
+  const invoice = purchaseInvoices.find(item => item.ref === row?.[1]) || null;
+  return {
+    no: row?.[0] || '',
+    ref: row?.[1] || '',
+    date: row?.[2] || '',
+    supplier: row?.[3] || '',
+    eta: row?.[4] || '',
+    currency,
+    total,
+    status: row?.[6] || '',
+    items: invoice?.items || []
+  };
+}
+
+function renderPurchaseOrderDetail() {
+  const index = currentPurchaseOrderIndex();
+  const order = purchaseOrderFromRow(purchaseOrderRows()[index]);
+  shell(`
+    ${pageHead(`采购订单 ${order.no}`, '供应商承诺、预计交期与采购明细', `
+      <button class="btn" data-pdf>${icons.download}PDF</button>
+      <button class="btn success" data-po-to-invoice="${index}">${icons.receipt}转为采购发票</button>
+    `)}
+    <section class="panel document-panel">
+      <div class="detail-grid">
+        <div><span>PO 号</span><strong>${order.no}</strong></div>
+        <div><span>供应商参考</span><strong>${order.ref}</strong></div>
+        <div><span>下单日期</span><strong>${prettyDate(order.date)}</strong></div>
+        <div><span>预计到货</span><strong>${prettyDate(order.eta)}</strong></div>
+        <div><span>供应商</span><strong>${order.supplier}</strong></div>
+        <div><span>状态</span><strong>${order.status}</strong></div>
+      </div>
+      <table class="invoice-items"><thead><tr><th>#</th><th>描述</th><th>SKU</th><th class="right">数量</th><th class="right">单价</th><th class="right">金额</th></tr></thead><tbody>
+        ${order.items.map((item, itemIndex) => `<tr><td>${itemIndex + 1}</td><td>${item.description}</td><td><code>${item.sku || '-'}</code></td><td class="right">${item.quantity}</td><td class="right">${money(item.unitCost || 0, order.currency)}</td><td class="right">${money((item.quantity || 0) * (item.unitCost || 0), order.currency)}</td></tr>`).join('') || `<tr><td colspan="6"><div class="empty">暂无明细。该采购订单仅保留了摘要信息。</div></td></tr>`}
+      </tbody></table>
+      <div class="invoice-summary"><div></div><div><strong>合计</strong><strong>${money(order.total, order.currency)}</strong></div></div>
+    </section>
+    <div class="invoice-actionbar">
+      <button class="btn ghost" data-back-purchase-orders>← 返回</button>
+    </div>
   `);
 }
 
@@ -2761,6 +2935,7 @@ function modalShell(title, body, foot) {
 function bindCommon() {
   document.querySelector('[data-logout]')?.addEventListener('click', () => {
     localStorage.removeItem(authKey);
+    localStorage.removeItem(sessionKey);
     localStorage.setItem(logoutKey, '1');
     modal = null;
     loginError = '';
@@ -3028,9 +3203,10 @@ function bindCommon() {
     try {
       const response = await fetch('/api/currencies/update', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ currencies })
       });
+      if (response.status === 401) return forceLogin();
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || '更新失败');
       currencies = result.currencies.map(normalizeCurrency);
@@ -3076,8 +3252,12 @@ function bindCommon() {
     saveState();
     route('users');
   }));
-  document.querySelectorAll('[data-reset-user]').forEach(button => button.addEventListener('click', event => {
+  document.querySelectorAll('[data-reset-user]').forEach(button => button.addEventListener('click', async event => {
     const user = users[Number(event.currentTarget.dataset.resetUser)];
+    if (!user) return;
+    user.password = '123456';
+    event.currentTarget.disabled = true;
+    await saveState();
     flashMessage = `${user.username} 的密码已重置为 123456`;
     route('users');
   }));
@@ -3184,10 +3364,11 @@ function bindCommon() {
     saveState();
     route('settings');
   }));
-  document.querySelector('[data-change-password]')?.addEventListener('click', () => {
+  document.querySelector('[data-change-password]')?.addEventListener('click', async event => {
     const current = fieldValue('currentPassword');
     const next = fieldValue('newPassword');
     const confirm = fieldValue('confirmPassword');
+    const user = currentUser();
     if (!current || !next || !confirm) {
       window.alert('请填写当前密码、新密码和确认密码');
       return;
@@ -3196,8 +3377,27 @@ function bindCommon() {
       window.alert('两次输入的新密码不一致');
       return;
     }
-    flashMessage = '密码已更新';
-    route('settings');
+    event.currentTarget.disabled = true;
+    const response = await fetch('/api/password', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ username: user.username, currentPassword: current, newPassword: next })
+    });
+    if (response.status === 401) return forceLogin();
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      window.alert('密码更新失败，请重新确认当前密码');
+      event.currentTarget.disabled = false;
+      return;
+    }
+    user.password = next;
+    localStorage.setItem(storageKey, JSON.stringify({ products, serials, transactions, suppliers, customers, quotations, purchaseInvoices, salesInvoices, deliveryOrders, goodsReceipts, capitalEntries, expenseEntries, currencies, users, roles, systemSettings, selectedProduct }));
+    localStorage.removeItem(authKey);
+    localStorage.removeItem(sessionKey);
+    localStorage.setItem(logoutKey, '1');
+    modal = null;
+    loginError = '密码已更新，请使用新密码重新登录';
+    renderLogin();
   });
   document.querySelector('[data-new-sales-invoice]')?.addEventListener('click', () => {
     const nextNumber = salesInvoices.length + 1;
@@ -3321,6 +3521,17 @@ function bindCommon() {
     selectedSalesInvoice = Number(event.currentTarget.dataset.openSalesInvoice);
     location.hash = `#/sales-invoices/${selectedSalesInvoice}`;
   }));
+  document.querySelectorAll('[data-delete-sales-invoice-row]').forEach(button => button.addEventListener('click', event => {
+    const index = Number(event.currentTarget.dataset.deleteSalesInvoiceRow);
+    const invoiceNo = salesInvoices[index]?.no;
+    deliveryOrders
+      .filter(order => order.invoiceNo === invoiceNo)
+      .forEach(removeDeliveryStock);
+    salesInvoices.splice(index, 1);
+    deliveryOrders = deliveryOrders.filter(order => order.invoiceNo !== invoiceNo);
+    saveState();
+    route('sales-invoices');
+  }));
   document.querySelector('[data-back-sales-invoices]')?.addEventListener('click', () => {
     syncActiveSalesInvoiceFromForm();
     saveState();
@@ -3334,7 +3545,12 @@ function bindCommon() {
     route(`sales-invoices/${selectedSalesInvoice}`);
   });
   document.querySelector('[data-delete-sales-invoice]')?.addEventListener('click', () => {
+    const invoiceNo = salesInvoices[selectedSalesInvoice]?.no;
+    deliveryOrders
+      .filter(order => order.invoiceNo === invoiceNo)
+      .forEach(removeDeliveryStock);
     salesInvoices.splice(selectedSalesInvoice, 1);
+    deliveryOrders = deliveryOrders.filter(order => order.invoiceNo !== invoiceNo);
     selectedSalesInvoice = 0;
     saveState();
     location.hash = '#/sales-invoices';
@@ -3472,13 +3688,14 @@ function bindCommon() {
   }));
   document.querySelector('[data-new-purchase-invoice]')?.addEventListener('click', () => {
     const nextNumber = purchaseInvoices.length + 1;
+    const currency = suppliers[0]?.currency || 'CNY';
     purchaseInvoices.unshift(normalizePurchaseInvoice({
       no: `PINV-${compactDate('2026-06-18')}-${String(nextNumber).padStart(4, '0')}`,
       date: '2026-06-18',
       status: '草稿',
       supplier: suppliers[0]?.name || '',
-      currency: suppliers[0]?.currency || 'CNY',
-      exchangeRate: 1,
+      currency,
+      exchangeRate: currencyRate(currency),
       items: []
     }));
     selectedPurchaseInvoice = 0;
@@ -3488,6 +3705,17 @@ function bindCommon() {
   document.querySelectorAll('[data-open-purchase-invoice]').forEach(button => button.addEventListener('click', event => {
     selectedPurchaseInvoice = Number(event.currentTarget.dataset.openPurchaseInvoice);
     location.hash = `#/purchase-invoices/${selectedPurchaseInvoice}`;
+  }));
+  document.querySelectorAll('[data-delete-purchase-invoice-row]').forEach(button => button.addEventListener('click', event => {
+    const index = Number(event.currentTarget.dataset.deletePurchaseInvoiceRow);
+    const invoiceNo = purchaseInvoices[index]?.no;
+    goodsReceipts
+      .filter(receipt => receipt.invoiceNo === invoiceNo)
+      .forEach(removeReceiptStock);
+    purchaseInvoices.splice(index, 1);
+    goodsReceipts = goodsReceipts.filter(receipt => receipt.invoiceNo !== invoiceNo);
+    saveState();
+    route('purchase-invoices');
   }));
   document.querySelector('[data-back-purchase-invoices]')?.addEventListener('click', () => {
     syncActiveInvoiceFromForm();
@@ -3503,6 +3731,11 @@ function bindCommon() {
     route(`purchase-invoices/${selectedPurchaseInvoice}`);
   });
   document.querySelector('[data-delete-purchase-invoice]')?.addEventListener('click', () => {
+    const invoiceNo = purchaseInvoices[selectedPurchaseInvoice]?.no;
+    goodsReceipts
+      .filter(receipt => receipt.invoiceNo === invoiceNo)
+      .forEach(removeReceiptStock);
+    goodsReceipts = goodsReceipts.filter(receipt => receipt.invoiceNo !== invoiceNo);
     purchaseInvoices.splice(selectedPurchaseInvoice, 1);
     selectedPurchaseInvoice = 0;
     saveState();
@@ -3787,6 +4020,44 @@ function bindCommon() {
     route('serial-qr');
   });
   document.querySelectorAll('[data-export]').forEach(btn => btn.addEventListener('click', () => exportCurrent(btn.dataset.export)));
+  document.querySelectorAll('[data-pdf]').forEach(btn => btn.addEventListener('click', () => exportPdfCurrent(btn.dataset.pdf || currentPage())));
+  document.querySelectorAll('[data-open-simple]').forEach(button => button.addEventListener('click', event => {
+    if (currentPage() === 'purchase-orders') {
+      location.hash = `#/purchase-orders/${event.currentTarget.dataset.openSimple}`;
+    }
+  }));
+  document.querySelectorAll('[data-delete-simple]').forEach(button => button.addEventListener('click', event => {
+    if (currentPage() === 'purchase-orders') {
+      purchasingPages['purchase-orders'].rows.splice(Number(event.currentTarget.dataset.deleteSimple), 1);
+      localStorage.setItem(purchaseOrdersKey, JSON.stringify(purchasingPages['purchase-orders'].rows));
+      route('purchase-orders');
+    }
+  }));
+  document.querySelector('[data-back-purchase-orders]')?.addEventListener('click', () => {
+    location.hash = '#/purchase-orders';
+  });
+  document.querySelector('[data-po-to-invoice]')?.addEventListener('click', event => {
+    const order = purchaseOrderFromRow(purchaseOrderRows()[Number(event.currentTarget.dataset.poToInvoice)]);
+    const existingIndex = purchaseInvoices.findIndex(invoice => invoice.ref === order.ref);
+    if (existingIndex >= 0) {
+      selectedPurchaseInvoice = existingIndex;
+      location.hash = `#/purchase-invoices/${existingIndex}`;
+      return;
+    }
+    purchaseInvoices.unshift(normalizePurchaseInvoice({
+      no: `PINV-${compactDate(order.date)}-${String(purchaseInvoices.length + 1).padStart(4, '0')}`,
+      ref: order.ref,
+      date: order.date.replaceAll('/', '-'),
+      status: '草稿',
+      supplier: order.supplier,
+      currency: order.currency,
+      exchangeRate: currencyRate(order.currency),
+      items: order.items
+    }));
+    selectedPurchaseInvoice = 0;
+    saveState();
+    location.hash = '#/purchase-invoices/0';
+  });
 }
 
 let renderTimer;
@@ -3805,6 +4076,83 @@ function exportCurrent(name) {
   link.download = `${name || currentPage()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function printableClone(element) {
+  const clone = element.cloneNode(true);
+  clone.querySelectorAll('button, .icon-action, .mini-btn, .dashed, svg').forEach(node => node.remove());
+  clone.querySelectorAll('input, textarea, select').forEach(control => {
+    const span = document.createElement('span');
+    span.className = 'print-value';
+    span.textContent = control.tagName === 'SELECT'
+      ? control.options[control.selectedIndex]?.textContent || control.value
+      : control.value;
+    control.replaceWith(span);
+  });
+  return clone.outerHTML;
+}
+
+function exportPdfCurrent(name) {
+  const main = document.querySelector('.content') || document.body;
+  const title = main.querySelector('h1')?.textContent?.trim() || name || currentPage();
+  const invoice = main.querySelector('.invoice-paper');
+  const tables = Array.from(main.querySelectorAll('table'));
+  const body = invoice
+    ? printableClone(invoice)
+    : tables.length
+      ? tables.map(table => printableClone(table)).join('')
+      : `<p>${main.textContent.trim() || '暂无数据'}</p>`;
+  document.querySelector('#pdf-print-frame')?.remove();
+  const frame = document.createElement('iframe');
+  frame.id = 'pdf-print-frame';
+  frame.style.position = 'fixed';
+  frame.style.right = '0';
+  frame.style.bottom = '0';
+  frame.style.width = '0';
+  frame.style.height = '0';
+  frame.style.border = '0';
+  frame.style.opacity = '0';
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument || frame.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(`<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>${title}</title>
+        <style>
+          @page { size: A4; margin: 14mm; }
+          * { box-sizing: border-box; }
+          body { margin: 0; color: #0b1f3f; font-family: Arial, "Microsoft YaHei", sans-serif; font-size: 12px; }
+          h1, h2, h3 { margin: 0 0 8px; }
+          .pdf-head { border-bottom: 1px solid #d9e2ef; margin-bottom: 14px; padding-bottom: 10px; }
+          .pdf-head h1 { font-size: 20px; }
+          .pdf-head p { margin: 4px 0 0; color: #60718a; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th, td { border-bottom: 1px solid #e5edf6; padding: 7px 8px; text-align: left; vertical-align: top; }
+          th { color: #52657d; font-size: 11px; text-transform: uppercase; background: #f7fafc; }
+          .right { text-align: right; }
+          .invoice-paper { width: 100%; padding: 0; box-shadow: none; }
+          .invoice-top, .invoice-parties, .invoice-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 18px 0; }
+          .invoice-meta label, .currency-box label { display: block; margin: 6px 0; color: #52657d; }
+          .invoice-label, code { color: #60718a; font-size: 11px; }
+          .print-value { display: inline-block; color: #0b1f3f; margin-left: 6px; }
+          footer { margin-top: 28px; color: #7b8ca6; text-align: center; }
+          @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+        </style>
+      </head>
+      <body>
+        <div class="pdf-head"><h1>${title}</h1><p>${new Date().toLocaleString()}</p></div>
+        ${body}
+      </body>
+    </html>`);
+  doc.close();
+  setTimeout(() => {
+    frame.contentWindow?.focus();
+    frame.contentWindow?.print();
+    setTimeout(() => frame.remove(), 1000);
+  }, 250);
 }
 
 window.addEventListener('hashchange', () => {
